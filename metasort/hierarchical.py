@@ -16,8 +16,8 @@ from .metasort import MetaSortConfig, MetaSortResult, MetaSortSolver
 class HierarchicalMetaSortConfig(MetaSortConfig):
     linkage_method: str = "average"
     coarse_group_count: int | None = None
-    max_genes_per_stage: int | None = 500
-    min_genes_per_stage: int = 20
+    max_genes_per_stage: int | None = 150
+    min_genes_per_stage: int = 30
     gene_score_epsilon: float = 1e-12
     single_cell_log1p: bool = True
     single_cell_equal_subject_weight: bool = True
@@ -67,7 +67,9 @@ class HierarchicalStageResult:
     selected_gene_count: int
     raw_proportions: dict[str, float]
     constrained_proportions: dict[str, float]
-    result: MetaSortResult
+    result: MetaSortResult | None
+    parent_results: dict[str, MetaSortResult] = field(default_factory=dict)
+    selected_gene_count_by_parent: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -334,6 +336,35 @@ class HierarchicalMetaSortSolver:
         }
         return selected_genes, result, raw_props
 
+    def _build_parent_local_bulk(
+        self,
+        signature: np.ndarray,
+        bulk: np.ndarray,
+        parent: HierarchyNode,
+        visible_nodes: list[HierarchyNode],
+        masses: dict[str, float],
+        cell_type_to_index: dict[str, int],
+    ) -> np.ndarray:
+        fitted_bulk = np.zeros_like(np.asarray(bulk, dtype=float))
+        parent_profile = None
+        for node in visible_nodes:
+            node_profile = self._aggregate_signature(
+                signature=signature,
+                nodes=[node],
+                cell_type_to_index=cell_type_to_index,
+            )[:, 0]
+            fitted_bulk = fitted_bulk + masses[node.name] * node_profile
+            if node.name == parent.name:
+                parent_profile = node_profile
+
+        if parent_profile is None:
+            raise ValueError(f"Parent node {parent.name} is not visible in the current stage.")
+
+        parent_mass = max(float(masses[parent.name]), self.config.min_weight_floor)
+        residual = np.asarray(bulk, dtype=float) - fitted_bulk
+        local_bulk = parent_mass * (parent_profile + residual)
+        return np.clip(local_bulk, self.config.min_weight_floor, None)
+
     def solve(
         self,
         signature: np.ndarray,
@@ -386,7 +417,7 @@ class HierarchicalMetaSortSolver:
                 config=asdict(self.config),
             )
 
-        visible_nodes = self._cut_to_coarse_groups(root)
+        visible_nodes = list(root.children) if hierarchy is not None else self._cut_to_coarse_groups(root)
         stage = 0
         selected_genes, result, raw_props = self._solve_stage(
             signature=signature,
@@ -409,27 +440,53 @@ class HierarchicalMetaSortSolver:
                 raw_proportions=raw_props,
                 constrained_proportions=constrained_props,
                 result=result,
+                parent_results={root.name: result},
+                selected_gene_count_by_parent={root.name: int(len(selected_genes))},
             )
         )
         stage += 1
 
         while any(not node.is_leaf for node in visible_nodes):
             expanded_nodes, expanded_parents = self._expand_visible_nodes(visible_nodes)
-            selected_genes, result, raw_props = self._solve_stage(
-                signature=signature,
-                bulk=bulk,
-                nodes=expanded_nodes,
-                cell_type_to_index=cell_type_to_index,
-            )
-
             next_masses: dict[str, float] = {}
-            expanded_parent_names = {node.name for node in expanded_parents}
+            raw_props: dict[str, float] = {}
+            parent_results: dict[str, MetaSortResult] = {}
+            selected_gene_count_by_parent: dict[str, int] = {}
+            selected_gene_union: set[int] = set()
+
             for node in visible_nodes:
                 parent_mass = masses[node.name]
-                if node.name not in expanded_parent_names:
+                if node.is_leaf:
                     next_masses[node.name] = parent_mass
+                    raw_props[node.name] = parent_mass
                     continue
-                child_raw = np.asarray([raw_props[child.name] for child in node.children], dtype=float)
+                if len(node.children) == 1:
+                    child = node.children[0]
+                    next_masses[child.name] = parent_mass
+                    raw_props[child.name] = 1.0
+                    selected_gene_count_by_parent[node.name] = 0
+                    continue
+
+                local_bulk = self._build_parent_local_bulk(
+                    signature=signature,
+                    bulk=bulk,
+                    parent=node,
+                    visible_nodes=visible_nodes,
+                    masses=masses,
+                    cell_type_to_index=cell_type_to_index,
+                )
+                selected_genes, result, parent_raw_props = self._solve_stage(
+                    signature=signature,
+                    bulk=local_bulk,
+                    nodes=node.children,
+                    cell_type_to_index=cell_type_to_index,
+                )
+                parent_results[node.name] = result
+                selected_gene_count_by_parent[node.name] = int(len(selected_genes))
+                selected_gene_union.update(int(gene_idx) for gene_idx in selected_genes)
+                raw_props.update(parent_raw_props)
+
+                child_raw = np.asarray([parent_raw_props[child.name] for child in node.children], dtype=float)
                 child_local = self._normalize(child_raw)
                 for child, local_prop in zip(node.children, child_local):
                     next_masses[child.name] = float(parent_mass * local_prop)
@@ -440,10 +497,12 @@ class HierarchicalMetaSortSolver:
                     stage=stage,
                     visible_nodes=[node.name for node in expanded_nodes],
                     expanded_parents=[node.name for node in expanded_parents],
-                    selected_gene_count=int(len(selected_genes)),
+                    selected_gene_count=int(len(selected_gene_union)),
                     raw_proportions=raw_props,
                     constrained_proportions=constrained_props,
-                    result=result,
+                    result=None,
+                    parent_results=parent_results,
+                    selected_gene_count_by_parent=selected_gene_count_by_parent,
                 )
             )
             masses = next_masses

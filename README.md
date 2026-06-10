@@ -78,8 +78,9 @@ print(result.proportions)
 single-cell reference (`singleCellExpr.txt`, `singleCellLabels.txt`, and
 optionally `singleCellSubjects.txt`). It then cuts the tree into coarse groups,
 estimates those group proportions with MetaSort, expands the tree one level at a
-time, performs stage-specific gene selection, and constrains child node
-proportions by the parent proportions estimated in the previous stage.
+time, performs split-specific gene selection for each expanded parent node,
+estimates child proportions with parent-local MetaSort solves, and constrains
+child node proportions by the parent proportions estimated in the previous stage.
 
 ```python
 from pathlib import Path
