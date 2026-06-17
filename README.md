@@ -19,13 +19,15 @@ The packaged default configuration matches the current tested parameter version:
 
 ```text
 lambda_hessian = 1.0
-lambda_avg_gradient = 1.0
-lambda_residual = 1.5
+lambda_avg_gradient = 0.0
+lambda_residual = 0.005
 lambda_gene_importance = 0.0
 lambda3 = 0.01
 lambda4 = 0.001
 convergence_tol = 0.005
 final_weight_max = 10.0
+use_dwls_base_weight = False
+normalize_meta_weight_mean = True
 ```
 
 Accuracy in the notebook is reported as:
@@ -51,6 +53,16 @@ jupyter notebook notebook_test/tissue_demo.ipynb
 ```
 
 The notebook uses the packaged example data under `data/`.
+
+When inputs are loaded with `load_bulk_signature_inputs`, each reference
+signature column and the selected bulk mixture vector are first normalized to
+sum to 1 over the shared genes. The reference columns and selected bulk vector
+are then concatenated and z-scored gene by gene with the same row mean and
+standard deviation.
+
+After this preprocessing, initial and weighted proportion solves use
+simplex-constrained least squares (`p >= 0`, `sum(p) = 1`) rather than NNLS
+followed by post-hoc normalization.
 
 ## Minimal Python Usage
 

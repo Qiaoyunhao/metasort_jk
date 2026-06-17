@@ -1,4 +1,4 @@
-from .algorithm import DWLSConfig, DWLSResult, DWLSSolver, load_bulk_signature_inputs
+from .algorithm import DWLSConfig, DWLSResult, DWLSSolver, load_bulk_signature_inputs, solve_simplex_constrained_ls
 from .metasort import MetaSortConfig, MetaSortResult, MetaSortSolver
 from .hierarchical import (
     HierarchicalMetaSortConfig,
@@ -14,6 +14,7 @@ __all__ = [
     "DWLSResult",
     "DWLSSolver",
     "load_bulk_signature_inputs",
+    "solve_simplex_constrained_ls",
     "MetaSortConfig",
     "MetaSortResult",
     "MetaSortSolver",

@@ -6,16 +6,15 @@ from typing import Any
 
 import numpy as np
 import torch
-from scipy.optimize import nnls
 
-from .algorithm import DWLSConfig, DWLSResult, DWLSSolver, load_bulk_signature_inputs
+from .algorithm import DWLSConfig, DWLSResult, DWLSSolver, load_bulk_signature_inputs, solve_simplex_constrained_ls
 
 
 @dataclass
 class MetaSortConfig(DWLSConfig):
     lambda_hessian: float = 1.0
-    lambda_avg_gradient: float = 1.0
-    lambda_residual: float = 1.5
+    lambda_avg_gradient: float = 0.0
+    lambda_residual: float = 0.005
     lambda_gene_importance: float = 0.0
     lambda3: float = 0.01
     lambda4: float = 0.001
@@ -30,8 +29,10 @@ class MetaSortConfig(DWLSConfig):
     avg_gradient_n_perturbations: int = 20
     avg_gradient_perturb_scale: float = 0.02
     avg_gradient_seed: int = 0
+    use_dwls_base_weight: bool = False
     use_log_base_weight: bool = True
     normalize_base_weight_mean: bool = True
+    normalize_meta_weight_mean: bool = True
     print_info: bool = False
 
 
@@ -112,7 +113,8 @@ class MetaSortSolver(DWLSSolver):
             else np.asarray(prev_meta_weights, dtype=float)
         )
         prev_meta = np.clip(prev_meta, cfg.meta_weight_floor, None)
-        prev_meta = prev_meta / np.mean(prev_meta)
+        if cfg.normalize_meta_weight_mean:
+            prev_meta = prev_meta / np.mean(prev_meta)
         prev_meta_tensor = torch.tensor(prev_meta, dtype=torch.double)
         simplex_basis = self._build_simplex_basis(signature.shape[1])
         perturb_props = self._sample_local_perturbation_proportions(
@@ -139,7 +141,8 @@ class MetaSortSolver(DWLSSolver):
 
         def loss_torch() -> tuple[torch.Tensor, dict[str, float]]:
             meta_clamped = torch.clamp(meta_tensor, min=cfg.meta_weight_floor)
-            meta_clamped = meta_clamped / torch.mean(meta_clamped)
+            if cfg.normalize_meta_weight_mean:
+                meta_clamped = meta_clamped / torch.mean(meta_clamped)
             total_weights = base_tensor * meta_clamped
             h_p = a_tensor.T @ (total_weights[:, None] * a_tensor)
             h_simplex = simplex_basis.T @ h_p @ simplex_basis
@@ -193,7 +196,8 @@ class MetaSortSolver(DWLSSolver):
             optimizer.step(closure)
             with torch.no_grad():
                 meta_tensor.data = torch.clamp(meta_tensor.data, min=cfg.meta_weight_floor)
-                meta_tensor.data = meta_tensor.data / torch.mean(meta_tensor.data)
+                if cfg.normalize_meta_weight_mean:
+                    meta_tensor.data = meta_tensor.data / torch.mean(meta_tensor.data)
                 total_loss, metrics = loss_torch()
                 round_loss = float(total_loss.detach().item())
                 meta_now = meta_tensor.detach().cpu().numpy().copy()
@@ -235,12 +239,17 @@ class MetaSortSolver(DWLSSolver):
         j: int,
         prev_meta_weights: np.ndarray | None = None,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, dict[str, float]]:
-        ws_scaled = self._compute_scaled_weights(signature, gold_standard, bulk)
-        ws_dampened, multiplier = self._apply_dampening(ws_scaled, j)
-        base_weights = np.log1p(ws_dampened) if self.config.use_log_base_weight else ws_dampened.copy()
-        base_weights = np.clip(base_weights, self.config.min_weight_floor, None)
-        if self.config.normalize_base_weight_mean:
-            base_weights = base_weights / np.mean(base_weights)
+        if self.config.use_dwls_base_weight:
+            ws_scaled = self._compute_scaled_weights(signature, gold_standard, bulk)
+            ws_dampened, multiplier = self._apply_dampening(ws_scaled, j)
+            base_weights = np.log1p(ws_dampened) if self.config.use_log_base_weight else ws_dampened.copy()
+            base_weights = np.clip(base_weights, self.config.min_weight_floor, None)
+            if self.config.normalize_base_weight_mean:
+                base_weights = base_weights / np.mean(base_weights)
+        else:
+            ws_dampened = np.ones(signature.shape[0], dtype=float)
+            multiplier = 1.0
+            base_weights = np.ones(signature.shape[0], dtype=float)
         meta_weights, meta_metrics = self.optimize_meta_weights(
             signature=signature,
             bulk=bulk,
@@ -249,10 +258,12 @@ class MetaSortSolver(DWLSSolver):
             prev_meta_weights=prev_meta_weights,
         )
         total_weights = np.clip(base_weights * meta_weights, self.config.min_weight_floor, None)
-        sqrt_w = np.sqrt(total_weights)
-        a_weighted = np.asarray(signature, dtype=float) * sqrt_w[:, None]
-        b_weighted = np.asarray(bulk, dtype=float) * sqrt_w
-        solution, _ = nnls(a_weighted, b_weighted)
+        solution = solve_simplex_constrained_ls(
+            signature,
+            bulk,
+            weights=total_weights,
+            initial=gold_standard,
+        )
         return solution, base_weights, meta_weights, multiplier, meta_metrics
 
     def solve_metasort(
@@ -266,7 +277,7 @@ class MetaSortSolver(DWLSSolver):
         bulk = np.asarray(bulk, dtype=float)
         initial_solution = self.solve_ols_internal(signature, bulk)
         initial_proportions = self._normalize_solution(initial_solution)
-        j = self.find_dampening_constant(signature, bulk, initial_solution)
+        j = self.find_dampening_constant(signature, bulk, initial_solution) if cfg.use_dwls_base_weight else 1
 
         solution = initial_solution.copy()
         meta_weights = np.ones(signature.shape[0], dtype=float)
