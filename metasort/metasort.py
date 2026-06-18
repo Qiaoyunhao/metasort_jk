@@ -20,8 +20,9 @@ class MetaSortConfig(DWLSConfig):
     lambda4: float = 0.001
     kappa: float = 0.1
     hessian_epsilon: float = 1e-8
+    use_sqrt_sphere_hessian: bool = False
     gene_importance_epsilon: float = 1e-12
-    meta_weight_floor: float = 1e-8
+    meta_weight_floor: float = 1e-2
     meta_lbfgs_lr: float = 1.0
     meta_lbfgs_max_iter: int = 100
     meta_lbfgs_rounds: int = 3
@@ -60,6 +61,79 @@ class MetaSortSolver(DWLSSolver):
         basis[-1, :] = -1.0
         q, _ = torch.linalg.qr(basis, mode="reduced")
         return q
+
+    @staticmethod
+    def _build_sphere_tangent_basis(point: torch.Tensor) -> torch.Tensor:
+        point = point / torch.clamp(torch.linalg.norm(point), min=1e-12)
+        n_cell_types = int(point.shape[0])
+        if n_cell_types <= 1:
+            return torch.empty(
+                (n_cell_types, 0),
+                dtype=point.dtype,
+                device=point.device,
+            )
+
+        anchor = int(torch.argmax(torch.abs(point)).detach().cpu().item())
+        tangent_indices = [idx for idx in range(n_cell_types) if idx != anchor]
+        seed = torch.eye(n_cell_types, dtype=point.dtype, device=point.device)[:, tangent_indices]
+        seed = seed - point[:, None] * (point @ seed)[None, :]
+        basis, _ = torch.linalg.qr(seed, mode="reduced")
+        return basis
+
+    @staticmethod
+    def _hessian_eigvals(projected_hessian: torch.Tensor, epsilon: float) -> torch.Tensor:
+        if projected_hessian.shape[0] == 0:
+            return torch.ones(1, dtype=projected_hessian.dtype, device=projected_hessian.device)
+        projected_hessian = 0.5 * (projected_hessian + projected_hessian.T)
+        eigvals = torch.linalg.eigvalsh(projected_hessian)
+        return torch.clamp(eigvals, min=epsilon)
+
+    @staticmethod
+    def _normalize_meta_weights_np(
+        weights: np.ndarray,
+        floor: float,
+        normalize_mean: bool,
+    ) -> np.ndarray:
+        if floor <= 0.0 or floor > 1.0:
+            raise ValueError("meta_weight_floor must be in (0, 1].")
+        weights = np.clip(np.asarray(weights, dtype=float), floor, None)
+        if not normalize_mean:
+            return weights
+
+        low = 0.0
+        high = 1.0 / max(float(np.mean(weights)), 1e-300)
+        for _ in range(80):
+            mid = 0.5 * (low + high)
+            candidate = np.maximum(floor, mid * weights)
+            if float(np.mean(candidate)) > 1.0:
+                high = mid
+            else:
+                low = mid
+        return np.maximum(floor, high * weights)
+
+    @staticmethod
+    def _normalize_meta_weights_torch(
+        weights: torch.Tensor,
+        floor: float,
+        normalize_mean: bool,
+    ) -> torch.Tensor:
+        if floor <= 0.0 or floor > 1.0:
+            raise ValueError("meta_weight_floor must be in (0, 1].")
+
+        floor_tensor = torch.tensor(floor, dtype=weights.dtype, device=weights.device)
+        weights = torch.clamp(weights, min=floor)
+        if not normalize_mean:
+            return weights
+
+        low = torch.zeros((), dtype=weights.dtype, device=weights.device)
+        high = 1.0 / torch.clamp(torch.mean(weights), min=1e-300)
+        for _ in range(40):
+            mid = 0.5 * (low + high)
+            candidate = torch.maximum(floor_tensor, mid * weights)
+            mean_too_high = torch.mean(candidate) > 1.0
+            high = torch.where(mean_too_high, mid, high)
+            low = torch.where(mean_too_high, low, mid)
+        return torch.maximum(floor_tensor, high * weights)
 
     @staticmethod
     def _sample_local_perturbation_proportions(
@@ -106,17 +180,31 @@ class MetaSortSolver(DWLSSolver):
         a_tensor = torch.tensor(np.asarray(signature, dtype=float), dtype=torch.double)
         bulk_tensor = torch.tensor(np.asarray(bulk, dtype=float), dtype=torch.double)
         p_tensor = torch.tensor(self._normalize_solution(proportions), dtype=torch.double)
-        base_tensor = torch.tensor(np.clip(np.asarray(base_weights, dtype=float), cfg.min_weight_floor, None), dtype=torch.double)
+        base_tensor = torch.tensor(
+            np.clip(np.asarray(base_weights, dtype=float), cfg.min_weight_floor, None),
+            dtype=torch.double,
+        )
         prev_meta = (
             np.ones(signature.shape[0], dtype=float)
             if prev_meta_weights is None
             else np.asarray(prev_meta_weights, dtype=float)
         )
-        prev_meta = np.clip(prev_meta, cfg.meta_weight_floor, None)
-        if cfg.normalize_meta_weight_mean:
-            prev_meta = prev_meta / np.mean(prev_meta)
+        prev_meta = self._normalize_meta_weights_np(
+            prev_meta,
+            floor=cfg.meta_weight_floor,
+            normalize_mean=cfg.normalize_meta_weight_mean,
+        )
         prev_meta_tensor = torch.tensor(prev_meta, dtype=torch.double)
         simplex_basis = self._build_simplex_basis(signature.shape[1])
+        sqrt_sphere_basis = None
+        sqrt_proportions = None
+        if cfg.use_sqrt_sphere_hessian:
+            sqrt_proportions = torch.sqrt(torch.clamp(p_tensor, min=cfg.hessian_epsilon))
+            sqrt_proportions = sqrt_proportions / torch.clamp(
+                torch.linalg.norm(sqrt_proportions),
+                min=cfg.hessian_epsilon,
+            )
+            sqrt_sphere_basis = self._build_sphere_tangent_basis(sqrt_proportions)
         perturb_props = self._sample_local_perturbation_proportions(
             proportions=self._normalize_solution(proportions),
             n_samples=cfg.avg_gradient_n_perturbations,
@@ -140,14 +228,25 @@ class MetaSortSolver(DWLSSolver):
         previous_round_meta = prev_meta_tensor.clone()
 
         def loss_torch() -> tuple[torch.Tensor, dict[str, float]]:
-            meta_clamped = torch.clamp(meta_tensor, min=cfg.meta_weight_floor)
-            if cfg.normalize_meta_weight_mean:
-                meta_clamped = meta_clamped / torch.mean(meta_clamped)
+            meta_clamped = self._normalize_meta_weights_torch(
+                meta_tensor,
+                floor=cfg.meta_weight_floor,
+                normalize_mean=cfg.normalize_meta_weight_mean,
+            )
             total_weights = base_tensor * meta_clamped
             h_p = a_tensor.T @ (total_weights[:, None] * a_tensor)
-            h_simplex = simplex_basis.T @ h_p @ simplex_basis
-            eigvals = torch.linalg.eigvalsh(h_simplex)
-            eigvals = torch.clamp(eigvals, min=cfg.hessian_epsilon)
+            if cfg.use_sqrt_sphere_hessian:
+                if sqrt_proportions is None or sqrt_sphere_basis is None:
+                    raise RuntimeError("sqrt-sphere Hessian basis was not initialized.")
+                h_sphere = 4.0 * (
+                    sqrt_proportions[:, None]
+                    * h_p
+                    * sqrt_proportions[None, :]
+                )
+                projected_hessian = sqrt_sphere_basis.T @ h_sphere @ sqrt_sphere_basis
+            else:
+                projected_hessian = simplex_basis.T @ h_p @ simplex_basis
+            eigvals = self._hessian_eigvals(projected_hessian, cfg.hessian_epsilon)
 
             hessian_loss = -cfg.lambda_hessian * torch.sum(torch.log(eigvals + cfg.hessian_epsilon))
             pred_bulk = a_tensor @ p_tensor
@@ -171,10 +270,26 @@ class MetaSortSolver(DWLSSolver):
                 "residual_penalty": float(residual_penalty.detach().item()),
                 "gene_importance_loss": float(gene_importance_loss.detach().item()),
                 "reg_loss": float(reg_loss.detach().item()),
-                "min_simplex_hessian_eig": float(torch.min(eigvals).detach().item()),
-                "mean_simplex_hessian_eig": float(torch.mean(eigvals).detach().item()),
-                "max_simplex_hessian_eig": float(torch.max(eigvals).detach().item()),
+                "min_projected_hessian_eig": float(torch.min(eigvals).detach().item()),
+                "mean_projected_hessian_eig": float(torch.mean(eigvals).detach().item()),
+                "max_projected_hessian_eig": float(torch.max(eigvals).detach().item()),
             }
+            if cfg.use_sqrt_sphere_hessian:
+                metrics.update(
+                    {
+                        "min_sqrt_sphere_hessian_eig": metrics["min_projected_hessian_eig"],
+                        "mean_sqrt_sphere_hessian_eig": metrics["mean_projected_hessian_eig"],
+                        "max_sqrt_sphere_hessian_eig": metrics["max_projected_hessian_eig"],
+                    }
+                )
+            else:
+                metrics.update(
+                    {
+                        "min_simplex_hessian_eig": metrics["min_projected_hessian_eig"],
+                        "mean_simplex_hessian_eig": metrics["mean_projected_hessian_eig"],
+                        "max_simplex_hessian_eig": metrics["max_projected_hessian_eig"],
+                    }
+                )
             return total_loss, metrics
 
         for lbfgs_round in range(cfg.meta_lbfgs_rounds):
@@ -195,9 +310,12 @@ class MetaSortSolver(DWLSSolver):
 
             optimizer.step(closure)
             with torch.no_grad():
-                meta_tensor.data = torch.clamp(meta_tensor.data, min=cfg.meta_weight_floor)
-                if cfg.normalize_meta_weight_mean:
-                    meta_tensor.data = meta_tensor.data / torch.mean(meta_tensor.data)
+                normalized_meta = self._normalize_meta_weights_torch(
+                    meta_tensor.data,
+                    floor=cfg.meta_weight_floor,
+                    normalize_mean=cfg.normalize_meta_weight_mean,
+                )
+                meta_tensor.data.copy_(normalized_meta)
                 total_loss, metrics = loss_torch()
                 round_loss = float(total_loss.detach().item())
                 meta_now = meta_tensor.detach().cpu().numpy().copy()

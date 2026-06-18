@@ -386,22 +386,12 @@ class HierarchicalMetaSortSolver:
         if len(set(cell_types)) != len(cell_types):
             raise ValueError("cell_types must be unique.")
 
-        hierarchy_source = "provided"
-        if hierarchy is not None:
-            root = hierarchy
-        elif single_cell_expr is not None:
-            if single_cell_labels is None:
-                raise ValueError("single_cell_labels must be provided with single_cell_expr.")
-            root = self.build_hierarchy_from_single_cell(
-                single_cell_expr=single_cell_expr,
-                single_cell_labels=single_cell_labels,
-                cell_types=cell_types,
-                single_cell_subjects=single_cell_subjects,
+        if hierarchy is None:
+            raise ValueError(
+                "Manual hierarchy must be provided. Use MetaSortSolver for direct deconvolution without a hierarchy."
             )
-            hierarchy_source = "single_cell"
-        else:
-            root = self.build_hierarchy(signature, cell_types)
-            hierarchy_source = "signature"
+        root = hierarchy
+        hierarchy_source = "manual"
         self._validate_hierarchy(root, cell_types)
         cell_type_to_index = {cell_type: idx for idx, cell_type in enumerate(cell_types)}
         masses: dict[str, float] = {root.name: 1.0}
@@ -417,7 +407,7 @@ class HierarchicalMetaSortSolver:
                 config=asdict(self.config),
             )
 
-        visible_nodes = list(root.children) if hierarchy is not None else self._cut_to_coarse_groups(root)
+        visible_nodes = list(root.children)
         stage = 0
         selected_genes, result, raw_props = self._solve_stage(
             signature=signature,

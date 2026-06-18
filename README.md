@@ -27,6 +27,8 @@ lambda4 = 0.001
 convergence_tol = 0.005
 final_weight_max = 10.0
 use_dwls_base_weight = False
+use_sqrt_sphere_hessian = False
+meta_weight_floor = 0.01
 normalize_meta_weight_mean = True
 ```
 
@@ -64,6 +66,11 @@ After this preprocessing, initial and weighted proportion solves use
 simplex-constrained least squares (`p >= 0`, `sum(p) = 1`) rather than NNLS
 followed by post-hoc normalization.
 
+By default the MetaSort Hessian spectrum is computed in the standard simplex
+tangent space. Setting `use_sqrt_sphere_hessian=True` maps the current
+proportions with `u = sqrt(p)` onto the unit sphere and computes the local
+Gauss-Newton Hessian spectrum in the tangent space at `u`.
+
 ## Minimal Python Usage
 
 ```python
@@ -86,21 +93,50 @@ print(result.proportions)
 
 ## Hierarchical MetaSort Usage
 
-`HierarchicalMetaSortSolver` can build the cell-type similarity tree from the
-single-cell reference (`singleCellExpr.txt`, `singleCellLabels.txt`, and
-optionally `singleCellSubjects.txt`). It then cuts the tree into coarse groups,
-estimates those group proportions with MetaSort, expands the tree one level at a
-time, performs split-specific gene selection for each expanded parent node,
-estimates child proportions with parent-local MetaSort solves, and constrains
-child node proportions by the parent proportions estimated in the previous stage.
+`HierarchicalMetaSortSolver` uses a manually supplied cell-type tree. It cuts
+the tree into coarse groups, estimates those group proportions with MetaSort,
+expands the tree one level at a time, performs split-specific gene selection for
+each expanded parent node, estimates child proportions with parent-local
+MetaSort solves, and constrains child node proportions by the parent proportions
+estimated in the previous stage.
+
+The batch comparison script runs plain MetaSort by default. Supplying
+`--hierarchy-file path/to/hierarchy.json` switches it to hierarchical
+deconvolution; omitting that argument keeps direct deconvolution.
+
+Manual hierarchy JSON uses the same node shape as `HierarchyNode.to_dict()`.
+Internal node `cell_types` can be omitted and inferred from children. Leaf node
+names must exactly match the signature cell-type column names.
+
+```json
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "lymphoid",
+      "children": [
+        {"name": "B cell"},
+        {"name": "T cell"}
+      ]
+    },
+    {
+      "name": "myeloid",
+      "children": [
+        {"name": "Monocyte"},
+        {"name": "Neutrophil"}
+      ]
+    }
+  ]
+}
+```
 
 ```python
 from pathlib import Path
 
 from metasort import (
     HierarchicalMetaSortSolver,
+    HierarchyNode,
     load_bulk_signature_inputs,
-    load_single_cell_hierarchy_inputs,
 )
 
 data_root = Path("data/Blood")
@@ -108,16 +144,21 @@ signature, bulk, genes, cell_types = load_bulk_signature_inputs(
     data_root,
     mixture_name="Mixture1",
 )
-single_cell_expr, single_cell_labels, single_cell_subjects = load_single_cell_hierarchy_inputs(data_root)
+hierarchy = HierarchyNode(
+    name="root",
+    cell_types=cell_types,
+    children=[
+        HierarchyNode(name=cell_type, cell_types=[cell_type])
+        for cell_type in cell_types
+    ],
+)
 
 solver = HierarchicalMetaSortSolver()
 result = solver.solve(
     signature,
     bulk,
     cell_types=cell_types,
-    single_cell_expr=single_cell_expr,
-    single_cell_labels=single_cell_labels,
-    single_cell_subjects=single_cell_subjects,
+    hierarchy=hierarchy,
 )
 
 print(result.cell_types)

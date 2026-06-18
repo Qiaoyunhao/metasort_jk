@@ -12,7 +12,13 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import nnls
 
-from metasort import MetaSortConfig, MetaSortSolver
+from metasort import (
+    HierarchicalMetaSortConfig,
+    HierarchicalMetaSortSolver,
+    HierarchyNode,
+    MetaSortConfig,
+    MetaSortSolver,
+)
 from metasort.algorithm import (
     _joint_gene_zscore,
     _normalize_columns_to_sum_one,
@@ -47,7 +53,25 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Normalize optimized meta weights to mean 1 after each LBFGS round.",
     )
+    parser.add_argument(
+        "--hierarchy-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional manual hierarchy JSON file. If provided, the script uses "
+            "HierarchicalMetaSortSolver; otherwise it uses plain MetaSortSolver."
+        ),
+    )
     parser.add_argument("--lambda-hessian", type=float, default=1.0)
+    parser.add_argument(
+        "--sqrt-sphere-hessian",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Compute the Hessian spectrum after mapping proportions with sqrt(p) "
+            "onto the sphere and projecting onto the current sphere tangent space."
+        ),
+    )
     parser.add_argument("--lambda3", type=float, default=0.01)
     parser.add_argument("--lambda4", type=float, default=0.001)
     parser.add_argument(
@@ -161,6 +185,138 @@ def write_csv(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index=False)
 
 
+def hierarchy_node_from_dict(data: Any) -> HierarchyNode:
+    if not isinstance(data, dict):
+        raise ValueError("Hierarchy JSON nodes must be objects.")
+
+    name = data.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("Every hierarchy node must have a non-empty string name.")
+
+    children_data = data.get("children", [])
+    if children_data is None:
+        children_data = []
+    if not isinstance(children_data, list):
+        raise ValueError(f"Hierarchy node {name} has non-list children.")
+
+    children = [hierarchy_node_from_dict(child_data) for child_data in children_data]
+    if children:
+        inferred_cell_types = [
+            cell_type
+            for child in children
+            for cell_type in child.cell_types
+        ]
+        provided_cell_types = data.get("cell_types")
+        if provided_cell_types is not None:
+            if not isinstance(provided_cell_types, list) or not all(
+                isinstance(value, str)
+                for value in provided_cell_types
+            ):
+                raise ValueError(f"Hierarchy node {name} has invalid cell_types.")
+            if (
+                set(provided_cell_types) != set(inferred_cell_types)
+                or len(provided_cell_types) != len(inferred_cell_types)
+            ):
+                raise ValueError(f"Hierarchy node {name} cell_types do not match its children.")
+        cell_types = inferred_cell_types
+    else:
+        provided_cell_types = data.get("cell_types")
+        if provided_cell_types is None:
+            cell_types = [name]
+        elif (
+            isinstance(provided_cell_types, list)
+            and len(provided_cell_types) == 1
+            and provided_cell_types[0] == name
+        ):
+            cell_types = [name]
+        else:
+            raise ValueError(
+                f"Leaf hierarchy node {name} must omit cell_types or set it to [{name!r}]."
+            )
+
+    distance = data.get("distance", 0.0)
+    return HierarchyNode(
+        name=name,
+        cell_types=cell_types,
+        children=children,
+        distance=float(distance),
+    )
+
+
+def load_hierarchy_file(path: Path) -> HierarchyNode:
+    try:
+        payload = json.loads(path.read_text())
+    except OSError as exc:
+        raise ValueError(f"Could not read hierarchy file {path}: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Hierarchy file {path} is not valid JSON: {exc}") from exc
+    return hierarchy_node_from_dict(payload)
+
+
+def base_metasort_extra(result: Any) -> dict[str, Any]:
+    return {
+        "Converged": bool(result.converged),
+        "Iterations": int(result.iterations),
+        "SelectedJ": int(result.selected_j),
+        "SelectedMultiplier": float(result.selected_multiplier),
+        "MetaWeightMin": float(result.meta_weight_min),
+        "MetaWeightMean": float(result.meta_weight_mean),
+        "MetaWeightMax": float(result.meta_weight_max),
+        "TotalWeightMin": float(result.total_weight_min),
+        "TotalWeightMean": float(result.total_weight_mean),
+        "TotalWeightMax": float(result.total_weight_max),
+        "HierarchyEnabled": False,
+        "HierarchySource": "",
+        "HierarchyStages": 0,
+    }
+
+
+def empty_metasort_extra(hierarchical: bool) -> dict[str, Any]:
+    return {
+        "Converged": False,
+        "Iterations": np.nan,
+        "SelectedJ": np.nan,
+        "SelectedMultiplier": np.nan,
+        "MetaWeightMin": np.nan,
+        "MetaWeightMean": np.nan,
+        "MetaWeightMax": np.nan,
+        "TotalWeightMin": np.nan,
+        "TotalWeightMean": np.nan,
+        "TotalWeightMax": np.nan,
+        "HierarchyEnabled": bool(hierarchical),
+        "HierarchySource": "",
+        "HierarchyStages": np.nan,
+    }
+
+
+def hierarchical_metasort_extra(result: Any) -> dict[str, Any]:
+    base_results = []
+    for stage_result in result.stage_results:
+        if stage_result.result is not None:
+            base_results.append(stage_result.result)
+        else:
+            base_results.extend(stage_result.parent_results.values())
+
+    converged = all(base_result.converged for base_result in base_results) if base_results else True
+    iterations = sum(int(base_result.iterations) for base_result in base_results)
+    hierarchy_source = "manual" if result.hierarchy_source == "provided" else result.hierarchy_source
+    return {
+        "Converged": bool(converged),
+        "Iterations": int(iterations),
+        "SelectedJ": np.nan,
+        "SelectedMultiplier": np.nan,
+        "MetaWeightMin": np.nan,
+        "MetaWeightMean": np.nan,
+        "MetaWeightMax": np.nan,
+        "TotalWeightMin": np.nan,
+        "TotalWeightMean": np.nan,
+        "TotalWeightMax": np.nan,
+        "HierarchyEnabled": True,
+        "HierarchySource": hierarchy_source,
+        "HierarchyStages": int(len(result.stage_results)),
+    }
+
+
 def main() -> int:
     args = parse_args()
     if args.n_mixtures <= 0:
@@ -171,13 +327,18 @@ def main() -> int:
         raise FileExistsError(f"{output_dir} already exists and is not empty. Use --overwrite.")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    config = MetaSortConfig(
+    hierarchy = load_hierarchy_file(args.hierarchy_file) if args.hierarchy_file is not None else None
+    use_hierarchy = hierarchy is not None
+    config_class = HierarchicalMetaSortConfig if use_hierarchy else MetaSortConfig
+    config = config_class(
         lambda_hessian=args.lambda_hessian,
+        use_sqrt_sphere_hessian=args.sqrt_sphere_hessian,
         lambda3=args.lambda3,
         lambda4=args.lambda4,
         normalize_meta_weight_mean=args.normalize_meta_weight_mean,
     )
-    solver = MetaSortSolver(config)
+    solver = HierarchicalMetaSortSolver(config) if use_hierarchy else MetaSortSolver(config)
+    primary_method_name = "HierarchicalMetaSortCurrent" if use_hierarchy else "MetaSortCurrent"
     tissues = discover_tissues(args.data_root)
     if args.tissues is not None:
         selected = set(args.tissues)
@@ -197,7 +358,6 @@ def main() -> int:
         signature_df = pd.read_csv(tissue_root / args.signature_name, sep="\t", index_col=0)
         bulk_df = pd.read_csv(tissue_root / args.bulk_name, sep="\t", index_col=0)
         truth_df = pd.read_csv(tissue_root / args.truth_name, sep="\t", index_col=0)
-
         cell_types = signature_df.columns.astype(str).to_list()
         missing_truth = sorted(set(cell_types) - set(truth_df.index.astype(str)))
         if missing_truth:
@@ -235,37 +395,24 @@ def main() -> int:
             metasort_error = None
             metasort_extra: dict[str, Any] = {}
             try:
-                result = solver.solve(signature, bulk, cell_types=cell_types)
+                if use_hierarchy:
+                    result = solver.solve(
+                        signature,
+                        bulk,
+                        cell_types=cell_types,
+                        hierarchy=hierarchy,
+                    )
+                    metasort_extra = hierarchical_metasort_extra(result)
+                else:
+                    result = solver.solve(signature, bulk, cell_types=cell_types)
+                    metasort_extra = base_metasort_extra(result)
                 metasort_prediction = normalize_nonnegative(np.asarray(result.proportions, dtype=float))
-                metasort_extra = {
-                    "Converged": bool(result.converged),
-                    "Iterations": int(result.iterations),
-                    "SelectedJ": int(result.selected_j),
-                    "SelectedMultiplier": float(result.selected_multiplier),
-                    "MetaWeightMin": float(result.meta_weight_min),
-                    "MetaWeightMean": float(result.meta_weight_mean),
-                    "MetaWeightMax": float(result.meta_weight_max),
-                    "TotalWeightMin": float(result.total_weight_min),
-                    "TotalWeightMean": float(result.total_weight_mean),
-                    "TotalWeightMax": float(result.total_weight_max),
-                }
             except Exception as exc:
                 metasort_prediction = np.full(len(cell_types), np.nan, dtype=float)
                 metasort_error = repr(exc)
-                metasort_extra = {
-                    "Converged": False,
-                    "Iterations": np.nan,
-                    "SelectedJ": np.nan,
-                    "SelectedMultiplier": np.nan,
-                    "MetaWeightMin": np.nan,
-                    "MetaWeightMean": np.nan,
-                    "MetaWeightMax": np.nan,
-                    "TotalWeightMin": np.nan,
-                    "TotalWeightMean": np.nan,
-                    "TotalWeightMax": np.nan,
-                }
+                metasort_extra = empty_metasort_extra(use_hierarchy)
             runtime = time.time() - start
-            methods.append(("MetaSortCurrent", metasort_prediction, metasort_extra, runtime, metasort_error))
+            methods.append((primary_method_name, metasort_prediction, metasort_extra, runtime, metasort_error))
 
             start = time.time()
             nnls_error = None
@@ -336,12 +483,12 @@ def main() -> int:
     for tissue_name in sorted(detail_df["Tissue"].unique()):
         row = {"Tissue": tissue_name}
         for metric in ["MeanAccuracy", "MeanL1", "MeanMAE", "MeanRMSE", "MeanPearson", "MeanRuntimeSec"]:
-            row[f"{metric}_MetaSortCurrent"] = float(wide_tissue.loc[tissue_name, (metric, "MetaSortCurrent")])
+            row[f"{metric}_{primary_method_name}"] = float(wide_tissue.loc[tissue_name, (metric, primary_method_name)])
             row[f"{metric}_NNLS"] = float(wide_tissue.loc[tissue_name, (metric, "NNLS")])
-        row["DeltaAccuracy_MetaSortMinusNNLS"] = (
-            row["MeanAccuracy_MetaSortCurrent"] - row["MeanAccuracy_NNLS"]
+        row[f"DeltaAccuracy_{primary_method_name}MinusNNLS"] = (
+            row[f"MeanAccuracy_{primary_method_name}"] - row["MeanAccuracy_NNLS"]
         )
-        row["DeltaL1_MetaSortMinusNNLS"] = row["MeanL1_MetaSortCurrent"] - row["MeanL1_NNLS"]
+        row[f"DeltaL1_{primary_method_name}MinusNNLS"] = row[f"MeanL1_{primary_method_name}"] - row["MeanL1_NNLS"]
         comparison_rows.append(row)
     comparison_by_tissue = pd.DataFrame(comparison_rows)
 
@@ -349,20 +496,20 @@ def main() -> int:
     comparison_overall = pd.DataFrame(
         [
             {
-                "N": int(overall_wide.loc["MetaSortCurrent", "N"]),
-                "MeanAccuracy_MetaSortCurrent": float(overall_wide.loc["MetaSortCurrent", "MeanAccuracy"]),
+                "N": int(overall_wide.loc[primary_method_name, "N"]),
+                f"MeanAccuracy_{primary_method_name}": float(overall_wide.loc[primary_method_name, "MeanAccuracy"]),
                 "MeanAccuracy_NNLS": float(overall_wide.loc["NNLS", "MeanAccuracy"]),
-                "DeltaAccuracy_MetaSortMinusNNLS": float(
-                    overall_wide.loc["MetaSortCurrent", "MeanAccuracy"]
+                f"DeltaAccuracy_{primary_method_name}MinusNNLS": float(
+                    overall_wide.loc[primary_method_name, "MeanAccuracy"]
                     - overall_wide.loc["NNLS", "MeanAccuracy"]
                 ),
-                "MeanL1_MetaSortCurrent": float(overall_wide.loc["MetaSortCurrent", "MeanL1"]),
+                f"MeanL1_{primary_method_name}": float(overall_wide.loc[primary_method_name, "MeanL1"]),
                 "MeanL1_NNLS": float(overall_wide.loc["NNLS", "MeanL1"]),
-                "DeltaL1_MetaSortMinusNNLS": float(
-                    overall_wide.loc["MetaSortCurrent", "MeanL1"]
+                f"DeltaL1_{primary_method_name}MinusNNLS": float(
+                    overall_wide.loc[primary_method_name, "MeanL1"]
                     - overall_wide.loc["NNLS", "MeanL1"]
                 ),
-                "MeanRuntimeSec_MetaSortCurrent": float(overall_wide.loc["MetaSortCurrent", "MeanRuntimeSec"]),
+                f"MeanRuntimeSec_{primary_method_name}": float(overall_wide.loc[primary_method_name, "MeanRuntimeSec"]),
                 "MeanRuntimeSec_NNLS": float(overall_wide.loc["NNLS", "MeanRuntimeSec"]),
             }
         ]
@@ -375,22 +522,42 @@ def main() -> int:
     write_csv(comparison_by_tissue, output_dir / "comparison_by_tissue.csv")
     write_csv(comparison_overall, output_dir / "comparison_overall.csv")
 
-    config_payload = {
-        **asdict(config),
-        "data_root": str(args.data_root),
-        "n_mixtures_per_tissue": args.n_mixtures,
-        "signature_name": args.signature_name,
-        "bulk_name": args.bulk_name,
-        "truth_name": args.truth_name,
-        "method_metasort": "MetaSortSolver(MetaSortConfig())",
-        "method_nnls": "scipy.optimize.nnls on the same preprocessed signature and bulk, normalized to proportions",
-        "preprocessing": (
-            "shared_genes -> signature column sum-to-one, bulk vector sum-to-one -> "
-            "joint gene-row z-score of signature plus selected bulk"
-        ),
-        "elapsed_sec": time.time() - run_start,
-        "python": sys.executable,
-    }
+    config_payload = asdict(config)
+    if use_hierarchy:
+        for unused_tree_key in (
+            "coarse_group_count",
+            "linkage_method",
+            "single_cell_equal_subject_weight",
+            "single_cell_log1p",
+        ):
+            config_payload.pop(unused_tree_key, None)
+    config_payload.update(
+        {
+            "data_root": str(args.data_root),
+            "n_mixtures_per_tissue": args.n_mixtures,
+            "signature_name": args.signature_name,
+            "bulk_name": args.bulk_name,
+            "truth_name": args.truth_name,
+            "hierarchical": bool(use_hierarchy),
+            "hierarchy_file": "" if args.hierarchy_file is None else str(args.hierarchy_file),
+            "hierarchy_source": "manual" if use_hierarchy else "",
+            "method_metasort": (
+                "HierarchicalMetaSortSolver(HierarchicalMetaSortConfig())"
+                if use_hierarchy
+                else "MetaSortSolver(MetaSortConfig())"
+            ),
+            "method_nnls": (
+                "scipy.optimize.nnls on the same preprocessed signature and bulk, "
+                "normalized to proportions"
+            ),
+            "preprocessing": (
+                "shared_genes -> signature column sum-to-one, bulk vector sum-to-one -> "
+                "joint gene-row z-score of signature plus selected bulk"
+            ),
+            "elapsed_sec": time.time() - run_start,
+            "python": sys.executable,
+        }
+    )
     pd.DataFrame([config_payload]).to_csv(output_dir / "config.csv", index=False)
     (output_dir / "config.json").write_text(json.dumps(config_payload, indent=2, sort_keys=True) + "\n")
 
