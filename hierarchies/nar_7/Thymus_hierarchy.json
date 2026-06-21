@@ -1,0 +1,92 @@
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "L1: Endothelial lineage",
+      "children": [
+        {
+          "name": "L2: Endothelial lineage / Endothelial lineage",
+          "children": [
+            {
+              "name": "endothelial_cell_of_artery"
+            },
+            {
+              "name": "capillary_endothelial_cell"
+            },
+            {
+              "name": "vein_endothelial_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Myeloid lineage",
+      "children": [
+        {
+          "name": "L2: Myeloid lineage / Myeloid lineage",
+          "children": [
+            {
+              "name": "monocyte"
+            },
+            {
+              "name": "macrophage"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: plasma_cell",
+      "children": [
+        {
+          "name": "L2: plasma_cell / plasma_cell",
+          "children": [
+            {
+              "name": "plasma_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: vascular_associated_smooth_muscle_cell",
+      "children": [
+        {
+          "name": "L2: vascular_associated_smooth_muscle_cell / vascular_associated_smooth_muscle_cell",
+          "children": [
+            {
+              "name": "vascular_associated_smooth_muscle_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: medullary_thymic_epithelial_cell",
+      "children": [
+        {
+          "name": "L2: medullary_thymic_epithelial_cell / medullary_thymic_epithelial_cell",
+          "children": [
+            {
+              "name": "medullary_thymic_epithelial_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: fibroblast",
+      "children": [
+        {
+          "name": "L2: fibroblast / fibroblast",
+          "children": [
+            {
+              "name": "fibroblast"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,79 @@
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "L1: Mesenchymal / stromal lineage",
+      "children": [
+        {
+          "name": "L2: Mesenchymal / stromal lineage / Mesenchymal / stromal lineage",
+          "children": [
+            {
+              "name": "stromal_cell"
+            },
+            {
+              "name": "muscle_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Lymphoid lineage",
+      "children": [
+        {
+          "name": "L2: Lymphoid lineage / Lymphoid lineage",
+          "children": [
+            {
+              "name": "naive_thymus_derived_CD8_positive_alpha_beta_T_cell"
+            },
+            {
+              "name": "regulatory_T_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Myeloid lineage",
+      "children": [
+        {
+          "name": "L2: Myeloid lineage / Myeloid lineage",
+          "children": [
+            {
+              "name": "macrophage"
+            },
+            {
+              "name": "CD1c_positive_myeloid_dendritic_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: mast_cell",
+      "children": [
+        {
+          "name": "L2: mast_cell / mast_cell",
+          "children": [
+            {
+              "name": "mast_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: endothelial_cell",
+      "children": [
+        {
+          "name": "L2: endothelial_cell / endothelial_cell",
+          "children": [
+            {
+              "name": "endothelial_cell"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

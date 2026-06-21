@@ -5,7 +5,7 @@ and notebooks for tissue deconvolution experiments.
 
 ## Contents
 
-- `metasort/algorithm.py`: base weighted deconvolution utilities.
+- `metasort/algorithm.py`: preprocessing and simplex-constrained least-squares utilities.
 - `metasort/metasort.py`: MetaSort solver with Hessian, average-gradient, residual, and regularization losses.
 - `data/`: packaged example tissues (`Blood`, `Eye`, `Fat`, `Lung`).
 - `notebook_test/tissue_demo.ipynb`: runs packaged tissue mixtures and reports accuracy.
@@ -25,8 +25,6 @@ lambda_gene_importance = 0.0
 lambda3 = 0.01
 lambda4 = 0.001
 convergence_tol = 0.005
-final_weight_max = 10.0
-use_dwls_base_weight = False
 use_sqrt_sphere_hessian = False
 meta_weight_floor = 0.01
 normalize_meta_weight_mean = True

@@ -1,0 +1,131 @@
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "L1: GABAergic interneurons",
+      "children": [
+        {
+          "name": "L2: GABAergic interneurons / CGE-derived interneurons",
+          "children": [
+            {
+              "name": "lamp5_gabaergic_cortical_interneuron"
+            },
+            {
+              "name": "sncg_gabaergic_cortical_interneuron"
+            },
+            {
+              "name": "vip_gabaergic_cortical_interneuron"
+            },
+            {
+              "name": "caudal_ganglionic_eminence_derived_gabaergic_cortical_interneuron"
+            }
+          ]
+        },
+        {
+          "name": "L2: GABAergic interneurons / MGE-derived interneurons",
+          "children": [
+            {
+              "name": "pvalb_gabaergic_cortical_interneuron"
+            },
+            {
+              "name": "chandelier_pvalb_gabaergic_cortical_interneuron"
+            },
+            {
+              "name": "sst_gabaergic_cortical_interneuron"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Glutamatergic cortical neurons",
+      "children": [
+        {
+          "name": "L2: Glutamatergic cortical neurons / Glutamatergic cortical neurons",
+          "children": [
+            {
+              "name": "near_projecting_glutamatergic_cortical_neuron"
+            },
+            {
+              "name": "l5_extratelencephalic_projecting_glutamatergic_cortical_neuron"
+            },
+            {
+              "name": "corticothalamic_projecting_glutamatergic_cortical_neuron"
+            },
+            {
+              "name": "l6b_glutamatergic_cortical_neuron"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Vascular / mesenchymal lineage",
+      "children": [
+        {
+          "name": "L2: Vascular / mesenchymal lineage / Vascular / mesenchymal lineage",
+          "children": [
+            {
+              "name": "cerebral_cortex_endothelial_cell"
+            },
+            {
+              "name": "vascular_leptomeningeal_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: astrocyte_of_the_cerebral_cortex",
+      "children": [
+        {
+          "name": "L2: astrocyte_of_the_cerebral_cortex / astrocyte_of_the_cerebral_cortex",
+          "children": [
+            {
+              "name": "astrocyte_of_the_cerebral_cortex"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: oligodendrocyte_precursor_cell",
+      "children": [
+        {
+          "name": "L2: oligodendrocyte_precursor_cell / oligodendrocyte_precursor_cell",
+          "children": [
+            {
+              "name": "oligodendrocyte_precursor_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: oligodendrocyte",
+      "children": [
+        {
+          "name": "L2: oligodendrocyte / oligodendrocyte",
+          "children": [
+            {
+              "name": "oligodendrocyte"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: microglial_cell",
+      "children": [
+        {
+          "name": "L2: microglial_cell / microglial_cell",
+          "children": [
+            {
+              "name": "microglial_cell"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

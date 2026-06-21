@@ -63,6 +63,18 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--lambda-hessian", type=float, default=1.0)
+    parser.add_argument("--lambda-residual", type=float, default=0.005)
+    parser.add_argument("--convergence-tol", type=float, default=0.02)
+    parser.add_argument(
+        "--meta-weight-baseline",
+        type=float,
+        default=1.0,
+        help=(
+            "Initial gene meta weight and regularization center. "
+            "Use 10 to keep the optimized weights centered around 10."
+        ),
+    )
+    parser.add_argument("--meta-weight-floor", type=float, default=1e-2)
     parser.add_argument(
         "--sqrt-sphere-hessian",
         action=argparse.BooleanOptionalAction,
@@ -257,8 +269,6 @@ def base_metasort_extra(result: Any) -> dict[str, Any]:
     return {
         "Converged": bool(result.converged),
         "Iterations": int(result.iterations),
-        "SelectedJ": int(result.selected_j),
-        "SelectedMultiplier": float(result.selected_multiplier),
         "MetaWeightMin": float(result.meta_weight_min),
         "MetaWeightMean": float(result.meta_weight_mean),
         "MetaWeightMax": float(result.meta_weight_max),
@@ -275,8 +285,6 @@ def empty_metasort_extra(hierarchical: bool) -> dict[str, Any]:
     return {
         "Converged": False,
         "Iterations": np.nan,
-        "SelectedJ": np.nan,
-        "SelectedMultiplier": np.nan,
         "MetaWeightMin": np.nan,
         "MetaWeightMean": np.nan,
         "MetaWeightMax": np.nan,
@@ -303,8 +311,6 @@ def hierarchical_metasort_extra(result: Any) -> dict[str, Any]:
     return {
         "Converged": bool(converged),
         "Iterations": int(iterations),
-        "SelectedJ": np.nan,
-        "SelectedMultiplier": np.nan,
         "MetaWeightMin": np.nan,
         "MetaWeightMean": np.nan,
         "MetaWeightMax": np.nan,
@@ -331,10 +337,14 @@ def main() -> int:
     use_hierarchy = hierarchy is not None
     config_class = HierarchicalMetaSortConfig if use_hierarchy else MetaSortConfig
     config = config_class(
+        convergence_tol=args.convergence_tol,
         lambda_hessian=args.lambda_hessian,
+        lambda_residual=args.lambda_residual,
         use_sqrt_sphere_hessian=args.sqrt_sphere_hessian,
         lambda3=args.lambda3,
         lambda4=args.lambda4,
+        meta_weight_baseline=args.meta_weight_baseline,
+        meta_weight_floor=args.meta_weight_floor,
         normalize_meta_weight_mean=args.normalize_meta_weight_mean,
     )
     solver = HierarchicalMetaSortSolver(config) if use_hierarchy else MetaSortSolver(config)

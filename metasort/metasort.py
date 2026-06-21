@@ -7,11 +7,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from .algorithm import DWLSConfig, DWLSResult, DWLSSolver, load_bulk_signature_inputs, solve_simplex_constrained_ls
+from .algorithm import load_bulk_signature_inputs, solve_simplex_constrained_ls
 
 
 @dataclass
-class MetaSortConfig(DWLSConfig):
+class MetaSortConfig:
+    convergence_tol: float = 0.02
+    max_iter: int = 1000
+    averaging_old_weight: int = 4
+    min_weight_floor: float = 1e-12
     lambda_hessian: float = 1.0
     lambda_avg_gradient: float = 0.0
     lambda_residual: float = 0.005
@@ -23,6 +27,7 @@ class MetaSortConfig(DWLSConfig):
     use_sqrt_sphere_hessian: bool = False
     gene_importance_epsilon: float = 1e-12
     meta_weight_floor: float = 1e-2
+    meta_weight_baseline: float = 1.0
     meta_lbfgs_lr: float = 1.0
     meta_lbfgs_max_iter: int = 100
     meta_lbfgs_rounds: int = 3
@@ -30,15 +35,19 @@ class MetaSortConfig(DWLSConfig):
     avg_gradient_n_perturbations: int = 20
     avg_gradient_perturb_scale: float = 0.02
     avg_gradient_seed: int = 0
-    use_dwls_base_weight: bool = False
-    use_log_base_weight: bool = True
-    normalize_base_weight_mean: bool = True
     normalize_meta_weight_mean: bool = True
     print_info: bool = False
 
 
 @dataclass
-class MetaSortResult(DWLSResult):
+class MetaSortResult:
+    proportions: list[float]
+    raw_solution: list[float]
+    initial_proportions: list[float]
+    iterations: int
+    converged: bool
+    change_history: list[float]
+    cell_types: list[str]
     meta_weight_min: float = 1.0
     meta_weight_mean: float = 1.0
     meta_weight_max: float = 1.0
@@ -49,10 +58,21 @@ class MetaSortResult(DWLSResult):
     meta_config: dict[str, float | int | bool] | None = None
 
 
-class MetaSortSolver(DWLSSolver):
+class MetaSortSolver:
     def __init__(self, config: MetaSortConfig | None = None) -> None:
-        super().__init__(config=config or MetaSortConfig())
-        self.config: MetaSortConfig
+        self.config = config or MetaSortConfig()
+
+    @staticmethod
+    def _normalize_solution(x: np.ndarray) -> np.ndarray:
+        x = np.clip(np.asarray(x, dtype=float), 0.0, None)
+        total = float(np.sum(x))
+        if total <= 0.0:
+            raise ValueError("Solution sum is zero after projection.")
+        return x / total
+
+    @staticmethod
+    def solve_initial(signature: np.ndarray, bulk: np.ndarray) -> np.ndarray:
+        return solve_simplex_constrained_ls(signature, bulk)
 
     @staticmethod
     def _build_simplex_basis(n_cell_types: int) -> torch.Tensor:
@@ -92,20 +112,23 @@ class MetaSortSolver(DWLSSolver):
     def _normalize_meta_weights_np(
         weights: np.ndarray,
         floor: float,
+        target_mean: float,
         normalize_mean: bool,
     ) -> np.ndarray:
-        if floor <= 0.0 or floor > 1.0:
-            raise ValueError("meta_weight_floor must be in (0, 1].")
+        if target_mean <= 0.0:
+            raise ValueError("meta_weight_baseline must be positive.")
+        if floor <= 0.0 or floor > target_mean:
+            raise ValueError("meta_weight_floor must be in (0, meta_weight_baseline].")
         weights = np.clip(np.asarray(weights, dtype=float), floor, None)
         if not normalize_mean:
             return weights
 
         low = 0.0
-        high = 1.0 / max(float(np.mean(weights)), 1e-300)
+        high = target_mean / max(float(np.mean(weights)), 1e-300)
         for _ in range(80):
             mid = 0.5 * (low + high)
             candidate = np.maximum(floor, mid * weights)
-            if float(np.mean(candidate)) > 1.0:
+            if float(np.mean(candidate)) > target_mean:
                 high = mid
             else:
                 low = mid
@@ -115,10 +138,13 @@ class MetaSortSolver(DWLSSolver):
     def _normalize_meta_weights_torch(
         weights: torch.Tensor,
         floor: float,
+        target_mean: float,
         normalize_mean: bool,
     ) -> torch.Tensor:
-        if floor <= 0.0 or floor > 1.0:
-            raise ValueError("meta_weight_floor must be in (0, 1].")
+        if target_mean <= 0.0:
+            raise ValueError("meta_weight_baseline must be positive.")
+        if floor <= 0.0 or floor > target_mean:
+            raise ValueError("meta_weight_floor must be in (0, meta_weight_baseline].")
 
         floor_tensor = torch.tensor(floor, dtype=weights.dtype, device=weights.device)
         weights = torch.clamp(weights, min=floor)
@@ -126,11 +152,12 @@ class MetaSortSolver(DWLSSolver):
             return weights
 
         low = torch.zeros((), dtype=weights.dtype, device=weights.device)
-        high = 1.0 / torch.clamp(torch.mean(weights), min=1e-300)
+        target_tensor = torch.tensor(target_mean, dtype=weights.dtype, device=weights.device)
+        high = target_tensor / torch.clamp(torch.mean(weights), min=1e-300)
         for _ in range(40):
             mid = 0.5 * (low + high)
             candidate = torch.maximum(floor_tensor, mid * weights)
-            mean_too_high = torch.mean(candidate) > 1.0
+            mean_too_high = torch.mean(candidate) > target_tensor
             high = torch.where(mean_too_high, mid, high)
             low = torch.where(mean_too_high, low, mid)
         return torch.maximum(floor_tensor, high * weights)
@@ -173,28 +200,41 @@ class MetaSortSolver(DWLSSolver):
         signature: np.ndarray,
         bulk: np.ndarray,
         proportions: np.ndarray,
-        base_weights: np.ndarray,
+        confidence_weights: np.ndarray | None = None,
         prev_meta_weights: np.ndarray | None = None,
     ) -> tuple[np.ndarray, dict[str, float]]:
         cfg = self.config
         a_tensor = torch.tensor(np.asarray(signature, dtype=float), dtype=torch.double)
         bulk_tensor = torch.tensor(np.asarray(bulk, dtype=float), dtype=torch.double)
         p_tensor = torch.tensor(self._normalize_solution(proportions), dtype=torch.double)
-        base_tensor = torch.tensor(
-            np.clip(np.asarray(base_weights, dtype=float), cfg.min_weight_floor, None),
-            dtype=torch.double,
-        )
-        prev_meta = (
+        confidence = (
             np.ones(signature.shape[0], dtype=float)
+            if confidence_weights is None
+            else np.asarray(confidence_weights, dtype=float)
+        )
+        if confidence.ndim != 1 or confidence.shape[0] != signature.shape[0]:
+            raise ValueError("confidence_weights must be 1D with the same gene dimension.")
+        if np.any(~np.isfinite(confidence)):
+            raise ValueError("confidence_weights must be finite.")
+        confidence = np.clip(confidence, cfg.min_weight_floor, None)
+        confidence_tensor = torch.tensor(confidence, dtype=torch.double)
+        prev_meta = (
+            np.full(signature.shape[0], cfg.meta_weight_baseline, dtype=float)
             if prev_meta_weights is None
             else np.asarray(prev_meta_weights, dtype=float)
         )
         prev_meta = self._normalize_meta_weights_np(
             prev_meta,
             floor=cfg.meta_weight_floor,
+            target_mean=cfg.meta_weight_baseline,
             normalize_mean=cfg.normalize_meta_weight_mean,
         )
         prev_meta_tensor = torch.tensor(prev_meta, dtype=torch.double)
+        meta_baseline_tensor = torch.tensor(
+            cfg.meta_weight_baseline,
+            dtype=torch.double,
+            device=prev_meta_tensor.device,
+        )
         simplex_basis = self._build_simplex_basis(signature.shape[1])
         sqrt_sphere_basis = None
         sqrt_proportions = None
@@ -231,9 +271,10 @@ class MetaSortSolver(DWLSSolver):
             meta_clamped = self._normalize_meta_weights_torch(
                 meta_tensor,
                 floor=cfg.meta_weight_floor,
+                target_mean=cfg.meta_weight_baseline,
                 normalize_mean=cfg.normalize_meta_weight_mean,
             )
-            total_weights = base_tensor * meta_clamped
+            total_weights = meta_clamped * confidence_tensor
             h_p = a_tensor.T @ (total_weights[:, None] * a_tensor)
             if cfg.use_sqrt_sphere_hessian:
                 if sqrt_proportions is None or sqrt_sphere_basis is None:
@@ -258,9 +299,9 @@ class MetaSortSolver(DWLSSolver):
             projected_mean_gradient = simplex_basis.T @ mean_gradient
             avg_gradient_loss = cfg.lambda_avg_gradient * torch.sum(projected_mean_gradient ** 2)
             residual_penalty = cfg.lambda_residual * torch.sum((residual_vector ** 2) * total_weights)
-            meta_diff = torch.norm(meta_clamped - torch.ones_like(meta_clamped))
+            meta_diff = torch.norm(meta_clamped - meta_baseline_tensor)
             reg_strength = cfg.lambda3 / (1.0 + torch.exp(-meta_diff / cfg.kappa)) + cfg.lambda4
-            reg_loss = reg_strength * torch.sum((meta_clamped - 1.0) ** 2)
+            reg_loss = reg_strength * torch.sum((meta_clamped - meta_baseline_tensor) ** 2)
             gene_importance_loss = -cfg.lambda_gene_importance * torch.sum(meta_clamped * gene_importance_tensor)
             total_loss = hessian_loss + avg_gradient_loss + residual_penalty + reg_loss + gene_importance_loss
             metrics = {
@@ -270,6 +311,9 @@ class MetaSortSolver(DWLSSolver):
                 "residual_penalty": float(residual_penalty.detach().item()),
                 "gene_importance_loss": float(gene_importance_loss.detach().item()),
                 "reg_loss": float(reg_loss.detach().item()),
+                "confidence_weight_min": float(np.min(confidence)),
+                "confidence_weight_mean": float(np.mean(confidence)),
+                "confidence_weight_max": float(np.max(confidence)),
                 "min_projected_hessian_eig": float(torch.min(eigvals).detach().item()),
                 "mean_projected_hessian_eig": float(torch.mean(eigvals).detach().item()),
                 "max_projected_hessian_eig": float(torch.max(eigvals).detach().item()),
@@ -313,6 +357,7 @@ class MetaSortSolver(DWLSSolver):
                 normalized_meta = self._normalize_meta_weights_torch(
                     meta_tensor.data,
                     floor=cfg.meta_weight_floor,
+                    target_mean=cfg.meta_weight_baseline,
                     normalize_mean=cfg.normalize_meta_weight_mean,
                 )
                 meta_tensor.data.copy_(normalized_meta)
@@ -349,69 +394,76 @@ class MetaSortSolver(DWLSSolver):
 
         return best_meta, best_metrics
 
-    def solve_meta_dampened_wls_j(
+    def solve_meta_weighted_step(
         self,
         signature: np.ndarray,
         bulk: np.ndarray,
-        gold_standard: np.ndarray,
-        j: int,
+        current_solution: np.ndarray,
+        confidence_weights: np.ndarray | None = None,
         prev_meta_weights: np.ndarray | None = None,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, float, dict[str, float]]:
-        if self.config.use_dwls_base_weight:
-            ws_scaled = self._compute_scaled_weights(signature, gold_standard, bulk)
-            ws_dampened, multiplier = self._apply_dampening(ws_scaled, j)
-            base_weights = np.log1p(ws_dampened) if self.config.use_log_base_weight else ws_dampened.copy()
-            base_weights = np.clip(base_weights, self.config.min_weight_floor, None)
-            if self.config.normalize_base_weight_mean:
-                base_weights = base_weights / np.mean(base_weights)
-        else:
-            ws_dampened = np.ones(signature.shape[0], dtype=float)
-            multiplier = 1.0
-            base_weights = np.ones(signature.shape[0], dtype=float)
+    ) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
         meta_weights, meta_metrics = self.optimize_meta_weights(
             signature=signature,
             bulk=bulk,
-            proportions=gold_standard,
-            base_weights=base_weights,
+            proportions=current_solution,
+            confidence_weights=confidence_weights,
             prev_meta_weights=prev_meta_weights,
         )
-        total_weights = np.clip(base_weights * meta_weights, self.config.min_weight_floor, None)
+        confidence = (
+            np.ones(signature.shape[0], dtype=float)
+            if confidence_weights is None
+            else np.asarray(confidence_weights, dtype=float)
+        )
+        total_weights = np.clip(meta_weights * confidence, self.config.min_weight_floor, None)
         solution = solve_simplex_constrained_ls(
             signature,
             bulk,
             weights=total_weights,
-            initial=gold_standard,
+            initial=current_solution,
         )
-        return solution, base_weights, meta_weights, multiplier, meta_metrics
+        return solution, meta_weights, meta_metrics
 
     def solve_metasort(
         self,
         signature: np.ndarray,
         bulk: np.ndarray,
         cell_types: list[str] | None = None,
+        confidence_weights: np.ndarray | None = None,
     ) -> MetaSortResult:
         cfg = self.config
         signature = np.asarray(signature, dtype=float)
         bulk = np.asarray(bulk, dtype=float)
-        initial_solution = self.solve_ols_internal(signature, bulk)
+        if signature.ndim != 2 or bulk.ndim != 1:
+            raise ValueError("signature must be 2D and bulk must be 1D.")
+        if signature.shape[0] != bulk.shape[0]:
+            raise ValueError("signature and bulk must have the same gene dimension.")
+        confidence = (
+            np.ones(signature.shape[0], dtype=float)
+            if confidence_weights is None
+            else np.asarray(confidence_weights, dtype=float)
+        )
+        if confidence.ndim != 1 or confidence.shape[0] != signature.shape[0]:
+            raise ValueError("confidence_weights must be 1D with the same gene dimension.")
+        if np.any(~np.isfinite(confidence)):
+            raise ValueError("confidence_weights must be finite.")
+        confidence = np.clip(confidence, cfg.min_weight_floor, None)
+
+        initial_solution = self.solve_initial(signature, bulk)
         initial_proportions = self._normalize_solution(initial_solution)
-        j = self.find_dampening_constant(signature, bulk, initial_solution) if cfg.use_dwls_base_weight else 1
 
         solution = initial_solution.copy()
-        meta_weights = np.ones(signature.shape[0], dtype=float)
+        meta_weights = np.full(signature.shape[0], cfg.meta_weight_baseline, dtype=float)
         changes: list[float] = []
         converged = False
-        final_ws = np.ones(signature.shape[0], dtype=float)
-        final_meta = np.ones(signature.shape[0], dtype=float)
-        final_multiplier = float(2 ** (j - 1))
+        final_meta = np.full(signature.shape[0], cfg.meta_weight_baseline, dtype=float)
         final_meta_metrics: dict[str, float] = {}
 
         for _ in range(cfg.max_iter):
-            new_solution, ws_dampened, meta_step, multiplier, meta_metrics = self.solve_meta_dampened_wls_j(
+            new_solution, meta_step, meta_metrics = self.solve_meta_weighted_step(
                 signature=signature,
                 bulk=bulk,
-                gold_standard=solution,
-                j=j,
+                current_solution=solution,
+                confidence_weights=confidence,
                 prev_meta_weights=meta_weights,
             )
             solution_average = (
@@ -421,28 +473,21 @@ class MetaSortSolver(DWLSSolver):
             changes.append(change)
             solution = solution_average
             meta_weights = meta_step
-            final_ws = ws_dampened
             final_meta = meta_step
-            final_multiplier = multiplier
             final_meta_metrics = meta_metrics
             if change <= cfg.convergence_tol:
                 converged = True
                 break
 
         proportions = self._normalize_solution(solution)
-        total_weights = np.clip(final_ws * final_meta, cfg.min_weight_floor, None)
+        total_weights = np.clip(final_meta * confidence, cfg.min_weight_floor, None)
         return MetaSortResult(
             proportions=proportions.tolist(),
             raw_solution=solution.tolist(),
-            ols_initial_proportions=initial_proportions.tolist(),
+            initial_proportions=initial_proportions.tolist(),
             iterations=len(changes),
             converged=converged,
-            selected_j=j,
-            selected_multiplier=final_multiplier,
             change_history=changes,
-            dampened_weight_min=float(np.min(final_ws)),
-            dampened_weight_mean=float(np.mean(final_ws)),
-            dampened_weight_max=float(np.max(final_ws)),
             cell_types=[] if cell_types is None else list(cell_types),
             meta_weight_min=float(np.min(final_meta)),
             meta_weight_mean=float(np.mean(final_meta)),
@@ -463,8 +508,14 @@ class MetaSortSolver(DWLSSolver):
         signature: np.ndarray,
         bulk: np.ndarray,
         cell_types: list[str] | None = None,
+        confidence_weights: np.ndarray | None = None,
     ) -> MetaSortResult:
-        return self.solve_metasort(signature, bulk, cell_types=cell_types)
+        return self.solve_metasort(
+            signature,
+            bulk,
+            cell_types=cell_types,
+            confidence_weights=confidence_weights,
+        )
 
 
 def main() -> None:

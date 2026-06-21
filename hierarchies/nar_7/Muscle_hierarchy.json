@@ -1,0 +1,103 @@
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "L1: Vascular lineage",
+      "children": [
+        {
+          "name": "L2: Vascular lineage / Blood vascular endothelial",
+          "children": [
+            {
+              "name": "endothelial_cell_of_artery"
+            },
+            {
+              "name": "capillary_endothelial_cell"
+            },
+            {
+              "name": "endothelial_cell_of_vascular_tree"
+            }
+          ]
+        },
+        {
+          "name": "L2: Vascular lineage / Lymphatic endothelial",
+          "children": [
+            {
+              "name": "endothelial_cell_of_lymphatic_vessel"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Myogenic lineage",
+      "children": [
+        {
+          "name": "L2: Myogenic lineage / Skeletal myocyte",
+          "children": [
+            {
+              "name": "fast_muscle_cell"
+            },
+            {
+              "name": "slow_muscle_cell"
+            }
+          ]
+        },
+        {
+          "name": "L2: Myogenic lineage / Satellite stem cell",
+          "children": [
+            {
+              "name": "skeletal_muscle_satellite_stem_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Mesenchymal stromal lineage",
+      "children": [
+        {
+          "name": "L2: Mesenchymal stromal lineage / mesenchymal_stem_cell",
+          "children": [
+            {
+              "name": "mesenchymal_stem_cell"
+            }
+          ]
+        },
+        {
+          "name": "L2: Mesenchymal stromal lineage / tendon_cell",
+          "children": [
+            {
+              "name": "tendon_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: pericyte_cell",
+      "children": [
+        {
+          "name": "L2: pericyte_cell / pericyte_cell",
+          "children": [
+            {
+              "name": "pericyte_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: macrophage",
+      "children": [
+        {
+          "name": "L2: macrophage / macrophage",
+          "children": [
+            {
+              "name": "macrophage"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

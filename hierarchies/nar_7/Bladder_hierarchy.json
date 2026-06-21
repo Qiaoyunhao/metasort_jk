@@ -1,0 +1,82 @@
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "L1: Hematopoietic lineage",
+      "children": [
+        {
+          "name": "L2: Hematopoietic lineage / Lymphoid lineage",
+          "children": [
+            {
+              "name": "T_cell"
+            },
+            {
+              "name": "mature_NK_T_cell"
+            }
+          ]
+        },
+        {
+          "name": "L2: Hematopoietic lineage / macrophage",
+          "children": [
+            {
+              "name": "macrophage"
+            }
+          ]
+        },
+        {
+          "name": "L2: Hematopoietic lineage / mast_cell",
+          "children": [
+            {
+              "name": "mast_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Fibroblast lineage",
+      "children": [
+        {
+          "name": "L2: Fibroblast lineage / Fibroblast lineage",
+          "children": [
+            {
+              "name": "fibroblast"
+            },
+            {
+              "name": "myofibroblast_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Vascular mural lineage",
+      "children": [
+        {
+          "name": "L2: Vascular mural lineage / Vascular mural lineage",
+          "children": [
+            {
+              "name": "pericyte_cell"
+            },
+            {
+              "name": "smooth_muscle_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: bladder_urothelial_cell",
+      "children": [
+        {
+          "name": "L2: bladder_urothelial_cell / bladder_urothelial_cell",
+          "children": [
+            {
+              "name": "bladder_urothelial_cell"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

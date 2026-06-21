@@ -1,0 +1,92 @@
+{
+  "name": "root",
+  "children": [
+    {
+      "name": "L1: T lineage",
+      "children": [
+        {
+          "name": "L2: T lineage / T lineage",
+          "children": [
+            {
+              "name": "effector_CD4_positive_alpha_beta_T_cell"
+            },
+            {
+              "name": "regulatory_T_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: Mononuclear phagocyte",
+      "children": [
+        {
+          "name": "L2: Mononuclear phagocyte / Mononuclear phagocyte",
+          "children": [
+            {
+              "name": "intermediate_monocyte"
+            },
+            {
+              "name": "macrophage"
+            },
+            {
+              "name": "CD1c_positive_myeloid_dendritic_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: B_cell",
+      "children": [
+        {
+          "name": "L2: B_cell / B_cell",
+          "children": [
+            {
+              "name": "B_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: plasma_cell",
+      "children": [
+        {
+          "name": "L2: plasma_cell / plasma_cell",
+          "children": [
+            {
+              "name": "plasma_cell"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: neutrophil",
+      "children": [
+        {
+          "name": "L2: neutrophil / neutrophil",
+          "children": [
+            {
+              "name": "neutrophil"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "L1: mast_cell",
+      "children": [
+        {
+          "name": "L2: mast_cell / mast_cell",
+          "children": [
+            {
+              "name": "mast_cell"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
