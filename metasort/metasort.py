@@ -14,7 +14,7 @@ from .algorithm import load_bulk_signature_inputs, solve_simplex_constrained_ls
 class MetaSortConfig:
     convergence_tol: float = 0.02
     max_iter: int = 1000
-    averaging_old_weight: int = 4
+    averaging_old_weight: float = 4.0
     min_weight_floor: float = 1e-12
     lambda_hessian: float = 1.0
     lambda_avg_gradient: float = 0.0

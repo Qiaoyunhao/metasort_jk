@@ -359,7 +359,7 @@ def main() -> None:
     parser.add_argument("--convergence-tol", type=float, default=0.02)
     parser.add_argument(
         "--averaging-old-weight",
-        type=int,
+        type=float,
         default=4,
         help=(
             "Weight assigned to the previous proportion vector when averaging with "
