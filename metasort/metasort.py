@@ -12,22 +12,22 @@ from .algorithm import load_bulk_signature_inputs, solve_simplex_constrained_ls
 
 @dataclass
 class MetaSortConfig:
-    convergence_tol: float = 0.02
+    convergence_tol: float = 0.005
     max_iter: int = 1000
-    averaging_old_weight: float = 4.0
+    averaging_old_weight: float = 2.5
     min_weight_floor: float = 1e-12
-    lambda_hessian: float = 1.0
+    lambda_hessian: float = 0.03
     lambda_avg_gradient: float = 0.0
-    lambda_residual: float = 0.005
+    lambda_residual: float = 0.02
     lambda_gene_importance: float = 0.0
-    lambda3: float = 0.01
-    lambda4: float = 0.001
+    lambda3: float = 0.0001
+    lambda4: float = 1e-05
     kappa: float = 0.1
     hessian_epsilon: float = 1e-8
-    use_sqrt_sphere_hessian: bool = False
+    use_sqrt_sphere_hessian: bool = True
     gene_importance_epsilon: float = 1e-12
-    meta_weight_floor: float = 1e-2
-    meta_weight_baseline: float = 1.0
+    meta_weight_floor: float = 1.0
+    meta_weight_baseline: float = 10.0
     meta_lbfgs_lr: float = 1.0
     meta_lbfgs_max_iter: int = 100
     meta_lbfgs_rounds: int = 3
@@ -56,6 +56,7 @@ class MetaSortResult:
     total_weight_max: float = 1.0
     meta_weight_metrics: dict[str, float] | None = None
     meta_config: dict[str, float | int | bool] | None = None
+    meta_weights: list[float] | None = None
 
 
 class MetaSortSolver:
@@ -497,6 +498,7 @@ class MetaSortSolver:
             total_weight_max=float(np.max(total_weights)),
             meta_weight_metrics=final_meta_metrics,
             meta_config=asdict(cfg),
+            meta_weights=final_meta.tolist(),
         )
 
     @staticmethod

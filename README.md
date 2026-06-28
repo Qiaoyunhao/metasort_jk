@@ -7,6 +7,7 @@ and notebooks for tissue deconvolution experiments.
 
 - `metasort/algorithm.py`: preprocessing and simplex-constrained least-squares utilities.
 - `metasort/metasort.py`: MetaSort solver with Hessian, average-gradient, residual, and regularization losses.
+- `metasort/anchor_recovery.py`: anchor-guided NNLS deconvolution and non-anchor reference recovery.
 - `data/`: packaged example tissues (`Blood`, `Eye`, `Fat`, `Lung`).
 - `notebook_test/tissue_demo.ipynb`: runs packaged tissue mixtures and reports accuracy.
 - `notebooks/all_tissues_method_comparison.ipynb`: compares MetaSort against external method outputs.
@@ -18,15 +19,17 @@ and notebooks for tissue deconvolution experiments.
 The packaged default configuration matches the current tested parameter version:
 
 ```text
-lambda_hessian = 1.0
+lambda_hessian = 0.03
 lambda_avg_gradient = 0.0
-lambda_residual = 0.005
+lambda_residual = 0.02
 lambda_gene_importance = 0.0
-lambda3 = 0.01
-lambda4 = 0.001
+lambda3 = 0.0001
+lambda4 = 1e-05
 convergence_tol = 0.005
-use_sqrt_sphere_hessian = False
-meta_weight_floor = 0.01
+averaging_old_weight = 2.5
+use_sqrt_sphere_hessian = True
+meta_weight_floor = 1.0
+meta_weight_baseline = 10.0
 normalize_meta_weight_mean = True
 ```
 
@@ -87,6 +90,58 @@ result = solver.solve(signature, bulk, cell_types=cell_types)
 
 print(result.cell_types)
 print(result.proportions)
+```
+
+## Anchor-Guided Reference Recovery
+
+`AnchorRecoverySolver` first runs MetaSort on all genes to score genes by
+residual fit and learned MetaSort weight. Genes with small residuals and large
+weights are selected as anchor genes. The final proportions are then estimated
+with simplex-constrained least squares on only the anchor genes, and non-anchor
+genes are recovered with a reference-regularized least-squares solve:
+
+```text
+min_S ||B_non_anchor - S_non_anchor P_anchor||^2
+    + lambda_reference ||S_non_anchor - S_sc,non_anchor||^2
+```
+
+Anchor genes keep their original reference expression, so they define the
+coordinate system used for deconvolution. Non-anchor genes are allowed to shift
+toward the bulk domain.
+
+By default, anchor selection and anchor-only proportion estimation use MetaSort-style
+preprocessing: reference columns and bulk samples are normalized to sum to 1,
+then jointly z-scored per gene before computing residuals, MetaSort weights,
+and anchor proportions. Anchor filtering uses the residual RMS in this
+preprocessed space by default; setting `anchor_residual_metric="relative"`
+switches back to residual RMS divided by the fitted/bulk RMS scale. Anchor
+proportions are solved with `p >= 0` and
+`sum(p) = 1`; setting `anchor_proportion_method="nnls"` switches back to NNLS
+followed by normalization. Reference recovery still uses the original input
+expression scale so recovered signatures remain interpretable.
+
+```python
+from pathlib import Path
+
+from metasort import AnchorRecoverySolver, load_bulk_signature_inputs
+
+data_root = Path("data/Blood")
+signature, bulk, genes, cell_types = load_bulk_signature_inputs(
+    data_root,
+    mixture_name="Mixture1",
+)
+
+solver = AnchorRecoverySolver()
+result = solver.solve(
+    signature,
+    bulk,
+    cell_types=cell_types,
+    genes=genes,
+)
+
+print(result.proportions)
+print(result.anchor_genes[:10])
+print(result.reconstruction_error)
 ```
 
 ## Hierarchical MetaSort Usage
